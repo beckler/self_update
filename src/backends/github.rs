@@ -64,12 +64,21 @@ impl Release {
 /// `ReleaseList` Builder
 #[derive(Clone, Debug)]
 pub struct ReleaseListBuilder {
+    api_endpoint: Option<String>,
     repo_owner: Option<String>,
     repo_name: Option<String>,
     target: Option<String>,
     auth_token: Option<String>,
 }
 impl ReleaseListBuilder {
+    /// Set the API endpoint for enterprise instances.
+    /// Ensure that it points to your v3 API path.
+    /// e.g. `http(s)://your-enterprise-github-instance.com/api/v3/
+    pub fn api_endpoint(&mut self, endpoint: &str) -> &mut Self {
+        self.api_endpoint = Some(endpoint.to_owned());
+        self
+    }
+
     /// Set the repo owner, used to build a github api url
     pub fn repo_owner(&mut self, owner: &str) -> &mut Self {
         self.repo_owner = Some(owner.to_owned());
@@ -114,6 +123,15 @@ impl ReleaseListBuilder {
             },
             target: self.target.clone(),
             auth_token: self.auth_token.clone(),
+            api_endpoint: if let Some(ref endpoint) = self.api_endpoint {
+                let mut endpoint = endpoint.to_owned();
+                if endpoint.ends_with("/") {
+                    let _slash = &endpoint.pop();
+                }
+                endpoint
+            } else {
+                "https://api.github.com".to_string()
+            },
         })
     }
 }
@@ -122,6 +140,7 @@ impl ReleaseListBuilder {
 /// returning a `Vec` of available `Release`s
 #[derive(Clone, Debug)]
 pub struct ReleaseList {
+    api_endpoint: String,
     repo_owner: String,
     repo_name: String,
     target: Option<String>,
@@ -131,6 +150,7 @@ impl ReleaseList {
     /// Initialize a ReleaseListBuilder
     pub fn configure() -> ReleaseListBuilder {
         ReleaseListBuilder {
+            api_endpoint: None,
             repo_owner: None,
             repo_name: None,
             target: None,
@@ -143,8 +163,8 @@ impl ReleaseList {
     pub fn fetch(self) -> Result<Vec<Release>> {
         set_ssl_vars!();
         let api_url = format!(
-            "https://api.github.com/repos/{}/{}/releases",
-            self.repo_owner, self.repo_name
+            "{}/repos/{}/{}/releases",
+            self.api_endpoint, self.repo_owner, self.repo_name
         );
         let releases = self.fetch_releases(&api_url)?;
         let releases = match self.target {
@@ -218,6 +238,7 @@ impl ReleaseList {
 /// `https://api.github.com/repos/<repo_owner>/<repo_name>/releases/latest`
 #[derive(Debug)]
 pub struct UpdateBuilder {
+    api_endpoint: Option<String>,
     repo_owner: Option<String>,
     repo_name: Option<String>,
     target: Option<String>,
@@ -231,12 +252,21 @@ pub struct UpdateBuilder {
     target_version: Option<String>,
     progress_style: Option<ProgressStyle>,
     auth_token: Option<String>,
+    
 }
 
 impl UpdateBuilder {
     /// Initialize a new builder
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// Set the API endpoint for enterprise instances.
+    /// Ensure that it points to your v3 API path.
+    /// e.g. `http(s)://your-enterprise-github-instance.com/api/v3/
+    pub fn api_endpoint(&mut self, endpoint: &str) -> &mut Self {
+        self.api_endpoint = Some(endpoint.to_owned());
+        self
     }
 
     /// Set the repo owner, used to build a github api url
@@ -409,6 +439,15 @@ impl UpdateBuilder {
             show_output: self.show_output,
             no_confirm: self.no_confirm,
             auth_token: self.auth_token.clone(),
+            api_endpoint: if let Some(ref endpoint) = self.api_endpoint {
+                let mut endpoint = endpoint.to_owned();
+                if endpoint.ends_with("/") {
+                    let _slash = &endpoint.pop();
+                }
+                endpoint
+            } else {
+                "https://api.github.com".to_string()
+            },
         }))
     }
 }
@@ -416,6 +455,7 @@ impl UpdateBuilder {
 /// Updates to a specified or latest release distributed via GitHub
 #[derive(Debug)]
 pub struct Update {
+    api_endpoint: String,
     repo_owner: String,
     repo_name: String,
     target: String,
@@ -441,8 +481,8 @@ impl ReleaseUpdate for Update {
     fn get_latest_release(&self) -> Result<Release> {
         set_ssl_vars!();
         let api_url = format!(
-            "https://api.github.com/repos/{}/{}/releases/latest",
-            self.repo_owner, self.repo_name
+            "{}/repos/{}/{}/releases/latest",
+            self.api_endpoint, self.repo_owner, self.repo_name
         );
         let resp = reqwest::blocking::Client::new()
             .get(&api_url)
@@ -463,8 +503,8 @@ impl ReleaseUpdate for Update {
     fn get_release_version(&self, ver: &str) -> Result<Release> {
         set_ssl_vars!();
         let api_url = format!(
-            "https://api.github.com/repos/{}/{}/releases/tags/{}",
-            self.repo_owner, self.repo_name, ver
+            "{}/repos/{}/{}/releases/tags/{}",
+            self.api_endpoint, self.repo_owner, self.repo_name, ver
         );
         let resp = reqwest::blocking::Client::new()
             .get(&api_url)
@@ -530,6 +570,7 @@ impl ReleaseUpdate for Update {
 impl Default for UpdateBuilder {
     fn default() -> Self {
         Self {
+            api_endpoint: None,
             repo_owner: None,
             repo_name: None,
             target: None,
