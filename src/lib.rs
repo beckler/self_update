@@ -11,7 +11,7 @@
 distribution backends.
 
 ```shell
-self_update = "0.14"
+self_update = "0.15"
 ```
 
 ## Usage
@@ -59,8 +59,9 @@ Run the above example to see `self_update` in action: `cargo run --example githu
 
 Amazon S3 is also supported as the backend to check for new releases. Provided a `bucket_name`
 and `asset_prefix` string, `self_update` will look up all matching files using the following format
-as a convention for the filenames: `<asset name>-<semver>-<platform/target>.<extension>`.
-Any file not matching the format, or not matching the provided prefix string, will be ignored.
+as a convention for the filenames: `[directory/]<asset name>-<semver>-<platform/target>.<extension>`.
+Leading directories will be stripped from the file name allowing the use of subdirectories in the S3 bucket,
+and any file not matching the format, or not matching the provided prefix string, will be ignored.
 
 ```rust
 use self_update::cargo_crate_version;
@@ -68,7 +69,7 @@ use self_update::cargo_crate_version;
 fn update() -> Result<(), Box<::std::error::Error>> {
     let status = self_update::backends::s3::Update::configure()
         .bucket_name("self_update_releases")
-        .asset_prefix("self_update")
+        .asset_prefix("something/self_update")
         .region("eu-west-2")
         .bin_name("self_update_example")
         .show_download_progress(true)
@@ -132,6 +133,9 @@ use std::cmp::min;
 use std::fs;
 use std::io;
 use std::path;
+
+#[macro_use]
+extern crate log;
 
 #[macro_use]
 mod macros;
@@ -239,10 +243,15 @@ pub enum Compression {
 }
 
 fn detect_archive(path: &path::Path) -> Result<ArchiveKind> {
-    match path.extension() {
+    let ext = path.extension();
+
+    debug!("Detecting archive type using extension: {:?}", ext);
+
+    let res = match ext {
         Some(extension) if extension == std::ffi::OsStr::new("zip") => {
             #[cfg(feature = "archive-zip")]
             {
+                debug!("Detected .zip archive");
                 Ok(ArchiveKind::Zip)
             }
             #[cfg(not(feature = "archive-zip"))]
@@ -253,7 +262,19 @@ fn detect_archive(path: &path::Path) -> Result<ArchiveKind> {
         Some(extension) if extension == std::ffi::OsStr::new("tar") => {
             #[cfg(feature = "archive-tar")]
             {
+                debug!("Detected .tar archive");
                 Ok(ArchiveKind::Tar(None))
+            }
+            #[cfg(not(feature = "archive-tar"))]
+            {
+                Err(Error::ArchiveNotEnabled("tar".to_string()))
+            }
+        }
+        Some(extension) if extension == std::ffi::OsStr::new("tgz") => {
+            #[cfg(feature = "archive-tar")]
+            {
+                debug!("Detected .tgz archive");
+                Ok(ArchiveKind::Tar(Some(Compression::Gz)))
             }
             #[cfg(not(feature = "archive-tar"))]
             {
@@ -268,6 +289,7 @@ fn detect_archive(path: &path::Path) -> Result<ArchiveKind> {
             Some(extension) if extension == std::ffi::OsStr::new("tar") => {
                 #[cfg(feature = "archive-tar")]
                 {
+                    debug!("Detected .tar.gz archive");
                     Ok(ArchiveKind::Tar(Some(Compression::Gz)))
                 }
                 #[cfg(not(feature = "archive-tar"))]
@@ -278,7 +300,11 @@ fn detect_archive(path: &path::Path) -> Result<ArchiveKind> {
             _ => Ok(ArchiveKind::Plain(Some(Compression::Gz))),
         },
         _ => Ok(ArchiveKind::Plain(None)),
-    }
+    };
+
+    debug!("Detected archive type: {:?}", res);
+
+    res
 }
 
 /// Extract contents of an encoded archive (e.g. tar.gz) file to a specified directory
@@ -413,6 +439,11 @@ impl<'a> Extract<'a> {
             None => detect_archive(&self.source)?,
         };
 
+        debug!(
+            "Attempting to extract {:?} file from {:?}",
+            file_to_extract, self.source
+        );
+
         // We cannot use a feature flag in a match arm. To bypass this the code block is
         // isolated in a closure and called accordingly.
         let extract_file_plain_or_tar = |source: fs::File, compression: Option<Compression>| {
@@ -420,6 +451,7 @@ impl<'a> Extract<'a> {
 
             match archive {
                 ArchiveKind::Plain(_) => {
+                    debug!("Copying file directly");
                     match fs::create_dir_all(into_dir) {
                         Ok(_) => (),
                         Err(e) => {
@@ -437,11 +469,17 @@ impl<'a> Extract<'a> {
                 }
                 #[cfg(feature = "archive-tar")]
                 ArchiveKind::Tar(_) => {
+                    debug!("Extracting from tar");
+
                     let mut archive = tar::Archive::new(reader);
                     let mut entry = archive
                         .entries()?
                         .filter_map(|e| e.ok())
-                        .find(|e| e.path().ok().filter(|p| p == file_to_extract).is_some())
+                        .find(|e| {
+                            let p = e.path();
+                            debug!("Archive path: {:?}", p);
+                            p.ok().filter(|p| p == file_to_extract).is_some()
+                        })
                         .ok_or_else(|| {
                             Error::Update(format!(
                                 "Could not find the required path in the archive: {:?}",

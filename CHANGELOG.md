@@ -5,6 +5,14 @@
 ### Changed
 ### Removed
 
+## [0.15.0]
+### Added
+- Handling for `.tgz` files
+### Changed
+- Support version tags with or without leading `v`
+- S3, support path prefixes that contain directories
+### Removed
+
 ## [0.14.0]
 ### Added
 - Expose `body` string in `Release` data

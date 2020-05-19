@@ -11,7 +11,6 @@ use indicatif::ProgressStyle;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use regex::Regex;
-use reqwest;
 use std::cmp::Ordering;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -442,8 +441,10 @@ impl ReleaseUpdate for Update {
     }
 }
 
-// Obtain list of releases from AWS S3 API, from bucket and region specified,
-// filtering assets which don't match the prefix string if provided
+/// Obtain list of releases from AWS S3 API, from bucket and region specified,
+/// filtering assets which don't match the prefix string if provided.
+///
+/// This will strip the prefix from provided file names, allowing use with subdirectories
 fn fetch_releases_from_s3(
     bucket_name: &str,
     region: &str,
@@ -457,6 +458,8 @@ fn fetch_releases_from_s3(
         "https://{}.s3.amazonaws.com/?list-type=2&max-keys={}{}",
         bucket_name, MAX_KEYS, prefix
     );
+
+    debug!("using api url: {:?}", api_url);
 
     let download_base_url = format!("https://{}.s3.{}.amazonaws.com/", bucket_name, region);
 
@@ -484,12 +487,14 @@ fn fetch_releases_from_s3(
 
     let mut current_tag = Tag::Other;
     let mut current_release: Option<Release> = None;
-    let regex = Regex::new(r"(?i)(?P<name>.+)-(?P<version>\d+\.\d+\.\d+)-.+").map_err(|err| {
-        Error::Release(format!(
-            "Failed constructing regex to parse S3 filenames: {}",
-            err
-        ))
-    })?;
+    let regex =
+        Regex::new(r"(?i)(?P<prefix>.*/)*(?P<name>.+)-[v]{0,1}(?P<version>\d+\.\d+\.\d+)-.+")
+            .map_err(|err| {
+                Error::Release(format!(
+                    "Failed constructing regex to parse S3 filenames: {}",
+                    err
+                ))
+            })?;
 
     // inspecting each XML element we populate our releases list
     let mut buf = Vec::new();
@@ -513,15 +518,24 @@ fn fetch_releases_from_s3(
                 if let Ok(txt) = e.unescape_and_decode(&reader) {
                     match current_tag {
                         Tag::Key => {
+                            let p = PathBuf::from(&txt);
+                            let exe_name = match p.file_name().map(|v| v.to_str()) {
+                                Some(Some(v)) => v,
+                                _ => &txt,
+                            };
+
                             if let Some(captures) = regex.captures(&txt) {
                                 let release = current_release.get_or_insert(Release::default());
                                 release.name = captures["name"].to_string();
                                 release.version =
                                     captures["version"].trim_start_matches('v').to_string();
                                 release.assets = vec![ReleaseAsset {
-                                    name: txt.clone(),
+                                    name: exe_name.to_string(),
                                     download_url: format!("{}{}", download_base_url, txt),
                                 }];
+                                debug!("Matched release: {:?}", release);
+                            } else {
+                                debug!("Regex mismatch: {:?}", &txt);
                             }
                         }
                         Tag::LastModified => {
